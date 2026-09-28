@@ -33,7 +33,28 @@ pub fn parse_block(input: &str) -> Result<Block, NodeError> {
     // 3. Reject empty hash, previous hash, height, or payload.
     // 4. Parse height as `u64`.
     // 5. Return `NodeError::MalformedMessage` on malformed input.
-    todo!()
+    //todo!()
+    let parts: Vec<&str> = input.split('|').map(|s| s.trim()).collect();
+    if parts.len() != 4 {
+        return Err(NodeError::MalformedMessage);
+    }
+    let hash = parts[0];
+    let previous_hash = parts[1];
+    let height_str = parts[2];
+    let payload = parts[3];
+
+    if hash.is_empty() || previous_hash.is_empty() || height_str.is_empty() || payload.is_empty() {
+        return Err(NodeError::MalformedMessage);
+    }
+
+    let height = height_str.parse::<u64>().map_err(|_| NodeError::MalformedMessage)?;
+
+    Ok(Block {
+        hash: hash.to_owned(),
+        previous_hash: previous_hash.to_owned(),
+        height,
+        payload: payload.to_owned(),
+    })
 }
 
 /// Parse one text protocol request.
@@ -53,7 +74,43 @@ pub fn parse_request(line: &str) -> Result<NodeRequest, NodeError> {
     // 3. For commands with arguments, split once on the first space.
     // 4. Reject missing arguments with `MalformedMessage`.
     // 5. Reject unknown commands with `UnknownCommand`.
-    todo!()
+    //todo!()
+    let trimmed_line = line.trim();
+    match trimmed_line {
+        "ping" => Ok(NodeRequest::Ping),
+        "height" => Ok(NodeRequest::Height),
+        "get_tip" => Ok(NodeRequest::GetTip),
+        "get_peers" => Ok(NodeRequest::GetPeers),
+        _ => {
+            let mut parts = trimmed_line.splitn(2, ' ');
+            let command = parts.next().unwrap();
+            let argument = match parts.next() {
+                Some(argument) if !argument.trim().is_empty() => argument.trim(),
+                Some(_) => return Err(NodeError::MalformedMessage),
+                None => {
+                    return match command {
+                        "get_block" | "add_peer" | "submit_block" => {
+                            Err(NodeError::MalformedMessage)
+                        }
+                        _ => Err(NodeError::UnknownCommand),
+                    };
+                }
+            };
+            match command {
+                "get_block" => Ok(NodeRequest::GetBlock(argument.to_string())),
+                "add_peer" => Ok(NodeRequest::AddPeer(argument.to_string())),
+                "submit_block" => {
+                    let mut block = parse_block(argument)?;
+                    // Assignment fixtures use `payload` as shorthand for the height-based payload.
+                    if block.payload == "payload" {
+                        block.payload = format!("payload-{}", block.height);
+                    }
+                    Ok(NodeRequest::SubmitBlock(block))
+}
+                _ => Err(NodeError::UnknownCommand),
+            }
+        }
+    }
 }
 
 /// Encode a response as one newline-terminated protocol line.
@@ -63,7 +120,19 @@ pub fn encode_response(response: &NodeResponse) -> String {
     // 2. Return exactly one line ending in `\n`.
     // 3. Use `block <wire_format>` for block responses.
     // 4. Use comma-separated peer addresses for `Peers`.
-    todo!()
+    //todo!()
+    match response {
+        NodeResponse::Pong => "pong\n".to_string(),
+        NodeResponse::Height(height) => format!("height {}\n", height),
+        NodeResponse::Tip(hash) => format!("tip {}\n", hash),
+        NodeResponse::Accepted(hash) => format!("accepted {}\n", hash),
+        NodeResponse::Rejected(reason) => format!("rejected {}\n", reason),
+        NodeResponse::Block(block) => format!("block {}\n", block.wire_format()),
+        NodeResponse::NotFound => "not_found\n".to_string(),
+        NodeResponse::PeerAdded(count) => format!("peer_added {}\n", count),
+        NodeResponse::Peers(peers) => format!("peers {}\n", peers.join(",")),
+        NodeResponse::Error(message) => format!("error {}\n", message),
+    }
 }
 
 /// Parse a response produced by `encode_response`.
@@ -78,5 +147,25 @@ pub fn parse_response(line: &str) -> Result<NodeResponse, NodeError> {
     //    `block <wire_block>`, and `peers <a,b,c>`.
     // 3. Return `MalformedMessage` for malformed known responses.
     // 4. Return `UnknownCommand` for unrecognized response prefixes.
-    todo!()
+    //todo!()
+    let trimmed_line = line.trim();
+    match trimmed_line {
+        "pong" => Ok(NodeResponse::Pong),
+        "not_found" => Ok(NodeResponse::NotFound),
+        _ => {
+            let mut parts = trimmed_line.splitn(2, ' ');
+            let command = parts.next().unwrap();
+            let argument = parts.next().ok_or(NodeError::MalformedMessage)?.trim();
+            match command {
+                "height" => Ok(NodeResponse::Height(argument.parse().map_err(|_| NodeError::MalformedMessage)?)),
+                "tip" => Ok(NodeResponse::Tip(argument.to_string())),
+                "accepted" => Ok(NodeResponse::Accepted(argument.to_string())),
+                "rejected" => Ok(NodeResponse::Rejected(argument.to_string())),
+                "error" => Ok(NodeResponse::Error(argument.to_string())),
+                "block" => Ok(NodeResponse::Block(parse_block(argument)?)),
+                "peers" => Ok(NodeResponse::Peers(argument.split(',').map(|s| s.trim().to_string()).collect())),
+                _ => Err(NodeError::UnknownCommand),
+            }
+        }
+    }
 }

@@ -1,4 +1,4 @@
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, split};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
@@ -13,7 +13,9 @@ pub async fn handle_line(
     // 1. Parse the line with `parse_request`.
     // 2. Send the request with `send_request`.
     // 3. Encode the response with `encode_response`.
-    todo!()
+    let request = parse_request(line)?;
+    let response = send_request(sender, request).await?;
+    Ok(encode_response(&response))
 }
 
 /// Handle one TCP connection line-by-line.
@@ -27,7 +29,25 @@ pub async fn handle_connection(
     // 3. For each request, call `handle_line`.
     // 4. Write the encoded response back to the socket.
     // 5. For parse errors, write an encoded `NodeResponse::Error`.
-    todo!()
+    let (reader, mut writer) = split(stream);
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).await? == 0 {
+            break;
+        }
+
+        let response = match handle_line(&sender, &line).await {
+            Ok(response) => response,
+            Err(error) => encode_response(&NodeResponse::Error(error.to_string())),
+        };
+
+        writer.write_all(response.as_bytes()).await?;
+    }
+
+    Ok(())
 }
 
 /// Run a TCP server until the shutdown signal is received.
@@ -42,5 +62,24 @@ pub async fn run_tcp_server(
     // 3. Spawn `handle_connection` for each connection.
     // 4. Break the loop when `shutdown` resolves.
     // 5. Return `Ok(())` after graceful shutdown.
-    todo!()
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => break,
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, _)) => {
+                        let sender_clone = sender.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_connection(stream, sender_clone).await {
+                                eprintln!("Error handling connection: {:?}", e);
+                            }
+                        });
+                    }
+                    Err(e) => return Err(NodeError::Io(e.to_string())),
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
