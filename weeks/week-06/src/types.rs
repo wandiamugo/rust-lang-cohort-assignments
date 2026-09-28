@@ -136,7 +136,23 @@ impl Transaction {
         // 3. Return `MissingUtxo(label)` if any input is unknown.
         // 4. Sum input values and subtract output value.
         // 5. Return `InvalidSpend(txid)` if outputs exceed inputs.
-        todo!()
+        //todo!()
+        if self.is_coinbase() {
+            return Ok(0);
+        }
+        let total_input: u64 = self
+            .inputs
+            .iter()
+            .map(|input| {
+                let outpoint = input.outpoint();
+                lookup(&outpoint).ok_or(MinerError::MissingUtxo(format!("{}:{}", outpoint.txid, outpoint.vout)))
+            })
+            .sum::<Result<u64, MinerError>>()?;
+        let total_output = self.total_output_value();
+        if total_output > total_input {
+            return Err(MinerError::InvalidSpend(self.txid.clone()));
+        }
+        Ok(total_input - total_output)
     }
 }
 
@@ -152,7 +168,18 @@ impl Hashable for Transaction {
         // 3. Append `|outputs:`.
         // 4. Append each output as `<value_sats>:<recipient>;`.
         // 5. Return the final string.
-        todo!()
+        //todo!()
+        let inputs = self
+            .inputs
+            .iter()
+            .map(|input| format!("{}:{};", input.previous_txid, input.previous_vout))
+            .collect::<String>();
+        let outputs = self
+            .outputs
+            .iter()
+            .map(|output| format!("{}:{};", output.value_sats, output.recipient))
+            .collect::<String>();
+        format!("tx:{}|inputs:{}|outputs:{}", self.txid, inputs, outputs)
     }
 }
 
@@ -166,6 +193,20 @@ impl Hashable for Block {
         // 1. Start with previous hash, height, merkle root, timestamp, and nonce.
         // 2. Append every transaction id followed by `;`.
         // 3. Return the final string.
-        todo!()
+        //todo!()
+        let txids = self
+            .transactions
+            .iter()
+            .map(|tx| format!("{};", tx.txid))
+            .collect::<String>();
+        format!(
+            "block:{}|height:{}|merkle:{}|time:{}|nonce:{}|txs:{}",
+            self.header.previous_block_hash,
+            self.height,
+            self.header.merkle_root,
+            self.header.timestamp,
+            self.header.nonce,
+            txids
+        )
     }
 }
