@@ -21,7 +21,13 @@ impl Wallet {
         // 1. Convert `owner` into an owned `String`.
         // 2. Start with empty UTXO, pending, and history collections.
         // 3. Return the wallet.
-        todo!()
+        //todo!()
+        Wallet {
+            owner: owner.to_string(),
+            utxos: BTreeMap::new(),
+            pending: Vec::new(),
+            history: Vec::new(),
+        }
     }
 
     /// Import one UTXO into the wallet.
@@ -29,7 +35,8 @@ impl Wallet {
         // Steps:
         // 1. Insert the UTXO by cloning its outpoint as the map key.
         // 2. Replace any existing entry at the same outpoint.
-        todo!()
+        //todo!()
+        self.utxos.insert(utxo.outpoint.clone(), utxo);
     }
 
     /// Sum confirmed spendable UTXOs owned by this wallet.
@@ -39,7 +46,12 @@ impl Wallet {
         // 2. Include only UTXOs whose owner matches `self.owner`.
         // 3. Include only UTXOs with confirmations greater than 0.
         // 4. Return the sum.
-        todo!()
+        //todo!()
+        self.utxos
+            .values()
+            .filter(|utxo| utxo.owner == self.owner && utxo.confirmations > 0)
+            .map(|utxo| utxo.value_sats)
+            .sum()
     }
 
     /// Sum outputs in pending transactions that pay this wallet.
@@ -48,7 +60,13 @@ impl Wallet {
         // 1. Iterate over pending transactions.
         // 2. Add outputs whose recipient matches `self.owner`.
         // 3. Return the sum.
-        todo!()
+        //todo!()
+        self.pending
+            .iter()
+            .flat_map(|tx| tx.outputs.iter())
+            .filter(|output| output.recipient == self.owner)
+            .map(|output| output.value_sats)
+            .sum()
     }
 
     /// Return owned, confirmed UTXOs in deterministic outpoint order.
@@ -58,7 +76,12 @@ impl Wallet {
         // 2. Keep UTXOs owned by `self.owner` with confirmations > 0.
         // 3. Clone them into a vector.
         // 4. Return the vector.
-        todo!()
+        //todo!()
+        self.utxos
+            .values()
+            .filter(|utxo| utxo.owner == self.owner && utxo.confirmations > 0)
+            .cloned()
+            .collect()
     }
 
     /// Select UTXOs until `amount_sats + fee_sats` is covered.
@@ -73,7 +96,20 @@ impl Wallet {
         // 3. Keep selecting until total >= amount + fee.
         // 4. Return selected UTXOs.
         // 5. Return `InsufficientFunds` if the total never covers the target.
-        todo!()
+        //todo!()
+        if amount_sats == 0 {
+            return Err(WalletError::InvalidAmount);
+        }
+        let mut selected_utxos = Vec::new();
+        let mut total = 0;
+        for utxo in self.available_utxos() {
+            selected_utxos.push(utxo.clone());
+            total += utxo.value_sats;
+            if total >= amount_sats + fee_sats {
+                return Ok(selected_utxos);
+            }
+        }
+        Err(WalletError::InsufficientFunds)
     }
 
     /// Build but do not record a send transaction.
@@ -91,7 +127,44 @@ impl Wallet {
         // 5. If selected total is greater than amount + fee, add a change output to `self.owner`.
         // 6. Derive a deterministic txid with `derive_wallet_txid`.
         // 7. Return the transaction without mutating wallet state.
-        todo!()
+        //todo!()
+        if recipient.is_empty() || amount_sats == 0 {
+            return Err(WalletError::InvalidAmount);
+        }
+        let selected_utxos = self.select_utxos(amount_sats, fee_sats)?;
+        let total_selected: u64 = selected_utxos.iter().map(|utxo| utxo.value_sats).sum();
+        let inputs: Vec<TxInput> = selected_utxos
+            .iter()
+            .map(|utxo| TxInput {
+                previous_output: OutPoint {
+                    txid: utxo.outpoint.txid.clone(),
+                    vout: utxo.outpoint.vout,
+                },
+            })
+            .collect();
+        let mut outputs: Vec<TxOutput> = vec![TxOutput {
+            recipient: recipient.to_string(),
+            value_sats: amount_sats,
+        }];
+        if total_selected > amount_sats + fee_sats {
+            outputs.push(TxOutput {
+                recipient: self.owner.clone(),
+                value_sats: total_selected - amount_sats - fee_sats,
+            });
+        }
+        let txid = derive_wallet_txid(
+            &self.owner,
+            recipient,
+            amount_sats,
+            fee_sats,
+            &selected_utxos,
+        );
+        Ok(Transaction {
+            txid,
+            inputs,
+            outputs,
+            fee_sats,
+        })
     }
 
     /// Record a transaction as pending and remove the spent UTXOs.
@@ -102,7 +175,22 @@ impl Wallet {
         // 3. Push the transaction into `pending`.
         // 4. Push the transaction into `history`.
         // 5. Return `Ok(())`.
-        todo!()
+        //todo!()
+        for input in &transaction.inputs {
+            let outpoint = input.previous_output.clone();
+            if !self.utxos.contains_key(&outpoint) {
+                return Err(WalletError::MissingUtxo(outpoint.label()));
+            }
+        }
+
+        for input in &transaction.inputs {
+            let outpoint = input.previous_output.clone();
+            self.utxos.remove(&outpoint);
+        }
+
+        self.pending.push(transaction.clone());
+        self.history.push(transaction);
+        Ok(())
     }
 
     /// Apply a confirmed transaction from the node.
@@ -112,7 +200,27 @@ impl Wallet {
         // 2. For every output paying `self.owner`, import it as a confirmed UTXO.
         // 3. Use the output index as `vout`.
         // 4. Add the transaction to history if it is not already present.
-        todo!()
+        //todo!()
+        self.pending.retain(|tx| tx.txid != transaction.txid);
+
+        for (index, output) in transaction.outputs.iter().enumerate() {
+            if output.recipient == self.owner {
+                let outpoint = OutPoint {
+                    txid: transaction.txid.clone(),
+                    vout: index as u32,
+                };
+                self.import_utxo(WalletUtxo {
+                    outpoint: outpoint.clone(),
+                    owner: self.owner.clone(),
+                    value_sats: output.value_sats,
+                    confirmations: 1,
+                });
+            }
+        }
+
+        if !self.history.iter().any(|tx| tx.txid == transaction.txid) {
+            self.history.push(transaction);
+        }
     }
 
     /// Return compact history lines in insertion order.
@@ -123,7 +231,14 @@ impl Wallet {
         // 1. Iterate over `self.history`.
         // 2. Format each transaction exactly as documented above.
         // 3. Return the lines.
-        todo!()
+        //todo!()
+        self.history
+            .iter()
+            .map(|tx| {
+                let total_output: u64 = tx.outputs.iter().map(|output| output.value_sats).sum();
+                format!("{}|outputs:{}|fee:{}", tx.txid, total_output, tx.fee_sats)
+            })
+            .collect()
     }
 }
 
@@ -135,5 +250,13 @@ pub fn wallet_summary(wallet: &Wallet) -> String {
     // Steps:
     // 1. Read owner, confirmed balance, pending incoming balance, pending count, and history count.
     // 2. Return the exact format documented above.
-    todo!()
+    //todo!()
+    format!(
+        "owner:{}|confirmed:{}|pending_in:{}|pending_txs:{}|history:{}",
+        wallet.owner,
+        wallet.confirmed_balance(),
+        wallet.pending_incoming_balance(),
+        wallet.pending.len(),
+        wallet.history.len()
+    )
 }
